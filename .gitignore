@@ -1,3 +1,7 @@
 out/
 .omc/
 .DS_Store
+
+# IntelliJ
+.idea/
+*.iml
