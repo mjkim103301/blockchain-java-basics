@@ -1,16 +1,20 @@
-# 블록체인 기초 실습 — Java
+# 블록체인 기초 실습 — Java · Solidity
 
-스터디 산출물 모음. **JDK 21만 있으면 된다. 외부 라이브러리 없음** — `java.security` 표준 API만 쓴다.
+스터디 산출물 모음. **1·2주차는 JDK 21만 있으면 된다. 외부 라이브러리 없음** — `java.security` 표준 API만 쓴다.
+**3주차는 브라우저만 있으면 된다** — Remix IDE.
 
 ```bash
 bash run.sh                  # 1주차 — 해시와 블록 연결
 bash run.sh SignatureMain    # 2주차 — 전자서명과 트랜잭션 구조
 ```
 
+3주차는 Java가 아니라 Solidity다. [remix.ethereum.org](https://remix.ethereum.org) 에 `contracts/Claim.sol` 을 붙여넣어 실행한다.
+
 | 주차 | 주제 | 코드 | 문서 |
 | --- | --- | --- | --- |
 | [1주차](#1주차--해시와-블록-연결) | SHA-256, 블록 연결, 작업증명 | `Hashes` `Block` `Blockchain` `Main` | 중앙DB/분산DB/블록체인 비교표 |
 | [2주차](#2주차--전자서명과-트랜잭션-구조) | 키 쌍, 서명·검증, 변조 탐지, 이더리움 필드 | `Wallet` `Transaction` `EthTxSpec` `SignatureMain` | [흐름도](docs/transaction-flow.md) · [토론](docs/discussion.md) |
+| [3주차](#3주차--스마트-컨트랙트와-evm) | EOA·컨트랙트 계정, EVM, 가스, 스토리지 노출 | `contracts/Claim.sol` | 실습 기록 5건 |
 
 ---
 
@@ -538,3 +542,256 @@ nonce   0       1       2         3        4
 - [ethereum.org · 가스](https://ethereum.org/ko/developers/docs/gas/)
 - [Signature (Java API)](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/security/Signature.html)
 - [JDK 16 Release Notes — secp256k1 제거](https://www.oracle.com/java/technologies/javase/16-relnote-issues.html)
+
+---
+
+# 3주차 — 스마트 컨트랙트와 EVM
+
+```
+https://remix.ethereum.org   →   contracts/Claim.sol 붙여넣기
+ENVIRONMENT = Remix VM (가짜 체인, 가짜 ETH 100개)
+```
+
+설치할 것이 없다. 브라우저만 있으면 된다.
+
+**산출물**: `contracts/Claim.sol` + 아래 실습 기록 5건
+
+---
+
+## 1. 무엇을 확인하려고 만든 코드인가
+
+`Claim.sol`은 "잘 만든 보험금 컨트랙트"가 아니다. **다섯 가지를 눈으로 보려고** 만든 실습용이다.
+
+```solidity
+address public  insurer;      // slot 0
+uint256 public  totalPaid;    // slot 1
+uint256 private secret = 777; // slot 2  ← 이게 핵심
+mapping(address => uint256) public claims;
+
+event Claimed(address indexed who, uint256 amount);
+
+modifier onlyInsurer() {
+    require(msg.sender == insurer, "not insurer");
+    _;
+}
+```
+
+| 확인할 것 | 어디서 보이나 |
+| --- | --- |
+| 배포는 수정이 아니다 | Deploy 누를 때마다 주소가 바뀜 |
+| 빈 칸 최초 기록 vs 수정의 가스 차이 | `pay` 1회차 / 2회차 비교 |
+| `require` 실패는 가스를 돌려주지 않는다 | 다른 계정으로 `pay` 호출 |
+| `indexed` 는 topics, 나머지는 data | raw logs |
+| **`private` 은 비밀이 아니다** | `getStorageAt(주소, 2)` |
+
+---
+
+## 2. 실습 결과
+
+아래 수치는 **Remix VM에서 실제로 측정한 값**이다.
+
+### 배포 — 함수 호출보다 10배 비싸다
+
+```
+to                  Claim.(constructor)
+contract address    0xd8b934580fcE35a11B58C6D73aDeE468a2833fa8
+status              1 Transaction mined and execution completed
+transaction cost    386,784 gas
+execution cost      311,974 gas
+```
+
+함수 한 번 호출이 3~7만 가스인데 **배포는 38만**이다.
+
+> 로그의 `output` 자리에 끝없이 긴 16진수가 찍히는데, **저 바이트코드가 체인에 저장되는 컨트랙트 본체**다. 우리가 쓴 Solidity 소스는 체인에 올라가지 않는다. 배포 비용이 큰 이유도 **코드 바이트를 영구 저장하기 때문**이다.
+>
+> 그 바이트코드 안을 보면 `6e6f7420696e7375726572` 라는 조각이 있다. ASCII로 읽으면 **`not insurer`** — revert 메시지가 바이트코드에 그대로 박혀 있다. 그래서 실무에서는 긴 문자열 대신 **커스텀 에러**를 쓴다.
+
+### 배포할 때마다 새 컨트랙트가 생긴다
+
+Deploy를 3번 눌렀더니 컨트랙트가 **3개** 생겼다. 그리고 1번에 `pay` 하고 3번에서 `totalPaid`를 읽으니 당연히 `0`이 나왔다.
+
+```
+Deploy 1회차 → nonce 0 → 0xd91…
+Deploy 2회차 → nonce 1 → 0xd8b934580fcE35a11B58C6D73aDeE468a2833fa8
+Deploy 3회차 → nonce 2 → 0x358AA13c52544ECCEF6B0ADD0f801012ADAD5eE3
+```
+
+컨트랙트 주소는 **`배포자 주소 + nonce`** 로 계산되므로 같은 계정으로 또 배포하면 반드시 다른 주소가 나온다.
+
+> **"Deploy는 앱 재시작이 아니라 서버를 한 대 더 사는 것"** 이다. 기존 컨트랙트는 옛날 코드와 옛날 상태를 들고 **영원히 남는다.** 문서에서 읽은 "배포하면 못 고친다"와 프록시 패턴이 왜 필요한지가 여기서 체감된다.
+
+### 가스 분해 — 어디에 돈이 드는가
+
+`pay(0x5B38…, 100000)` **1회차 실측**:
+
+```
+transaction cost    70,665 gas
+execution cost      49,069 gas
+```
+
+항목별로 뜯으면 거의 맞아떨어진다.
+
+| 항목 | 가스 | 비고 |
+| --- | ---: | --- |
+| 기본 트랜잭션 | 21,000 | 모든 트랜잭션의 고정비 |
+| `claims[to]` 0 → 100000 | 22,100 | **빈 슬롯 최초 기록** |
+| `totalPaid` 0 → 100000 | 22,100 | **빈 슬롯 최초 기록** |
+| `emit Claimed(...)` | ~1,400 | LOG2 + topic + data |
+| calldata · 기타 연산 | ~4,000 | |
+| **합계** | **~70,600** | 실측 70,665와 일치 |
+
+2회차는 두 칸 모두 "수정"이 되므로 **슬롯당 5,000**으로 떨어진다 (계산값 **약 35,000 가스**).
+
+```
+1회차  빈 칸에 최초 기록   22,100 × 2
+2회차  있는 값을 수정       5,000 × 2    ← 4배 이상 싸다
+```
+
+> **같은 코드, 같은 입력, 같은 결과인데 가격이 다르다.** 그래서 실무에서는 "0으로 되돌리지 말고 1을 남겨두는" 최적화까지 한다 — 다음에 쓸 때 20,000이 아니라 2,900만 내면 되니까.
+
+### 이벤트 — `indexed` 가 실제로 갈리는 모습
+
+```json
+"topics": [
+  "0xd8138f8a3f377c5259ca548e70e4c2de94f129f5a11036a15b69513cba2b426a",
+  "0x0000000000000000000000005b38da6a701c568545dcfcb03fcb875f56beddc4"
+],
+"data": "0x00000000000000000000000000000000000000000000000000000000000186a0"
+```
+
+| 자리 | 내용 | 선언 |
+| --- | --- | --- |
+| `topics[0]` | `keccak256("Claimed(address,uint256)")` | 이벤트 종류 |
+| `topics[1]` | `who` = `0x5B38Da…` | **`indexed`** → 필터 가능 |
+| `data` | `0x186a0` = **100,000** | indexed 아님 → 값만 |
+
+**이게 인덱서가 읽는 구조다.** 노드가 `topics`로 필터링해 주기 때문에 `indexed` 필드만 조건 검색이 된다.
+
+```javascript
+// "0x5B38… 에게 지급된 건만 전부"
+contract.queryFilter(contract.filters.Claimed("0x5B38Da…"))
+```
+
+`indexed`는 **최대 3개**까지만 붙일 수 있다. 그 3개가 사실상 **그 컨트랙트의 인덱스 컬럼**이라, 설계 시점에 무엇을 `indexed`로 할지가 나중에 조회 가능 범위를 결정한다.
+
+---
+
+## 3. 핵심 — `private` 은 비밀이 아니다
+
+이 주차에서 가장 중요한 결과다.
+
+```solidity
+uint256 private secret = 777;   // 조회 함수 없음. private.
+```
+
+이 변수는 **`private`이고, 꺼내주는 함수가 코드 어디에도 없다.** 그런데 —
+
+```javascript
+web3.eth.getStorageAt("0x358AA13c52544ECCEF6B0ADD0f801012ADAD5eE3", 2).then(console.log)
+```
+
+```
+0x0309        →  parseInt("0x0309", 16)  =  777
+```
+
+**명령 한 줄로 나왔다.** 해킹도, 권한도, 익스플로잇도 아니다. **그냥 공개 데이터를 읽은 것**이다.
+
+슬롯 세 칸을 전부 찍으면 이렇다.
+
+| 슬롯 | 변수 | 읽은 값 | 의미 |
+| --- | --- | --- | --- |
+| 0 | `insurer` (public) | `0x…5b38da6a…beddc4` | 당연함 — 공개용 |
+| 1 | `totalPaid` (public) | `0x0186a0` = 100,000 | 당연함 |
+| **2** | **`secret` (private)** | **`0x0309` = 777** | **⚠️ 읽히면 안 되는 값** |
+
+### 왜 이렇게 되나
+
+- 스토리지는 **슬롯 번호로 그냥 읽힌다.** 변수는 **선언 순서대로** slot 0, 1, 2… 에 배치된다
+- `getStorageAt`은 **모든 이더리움 노드가 제공하는 표준 RPC**다. Infura·Alchemy·Etherscan 어디서든 누구나 쓸 수 있다
+- `private`의 뜻은 **"다른 컨트랙트가 코드로 못 읽는다"** 일 뿐, **"사람이 못 본다"가 아니다**
+
+### 그래서 절대 하면 안 되는 것
+
+- 비밀번호·시드·API 키를 컨트랙트에 저장
+- 추첨 당첨번호를 미리 저장해 두고 나중에 공개
+- **개인정보를 온체인에 올리기** — 주민번호, 가족관계, 병력 전부
+- "아직 공개하면 안 되는" 가격·조건을 넣어 두기
+
+진짜 비밀이 필요하면 **커밋-리빌**(해시만 먼저 올리고 나중에 원본 공개)이나 **영지식 증명**을 써야 한다. `private` 키워드로는 안 된다.
+
+> **금융권 관점 정리** — 온체인에 올라간 모든 것은 공개 데이터이고, 거기에 더해 **삭제도 불가능하다.** 이 둘이 겹치면 개인정보보호법 제21조(파기 의무)와 정면 충돌한다.
+> 그래서 실무 설계는 거의 전부 **원본은 밖에 두고 해시만 올리는** 앵커링 패턴으로 수렴한다.
+
+---
+
+## 4. 남은 확인 과제
+
+아직 안 해본 것. 각 1분이면 된다.
+
+**① `require` 실패도 가스를 먹는다**
+
+맨 위 `ACCOUNT`를 다른 계정으로 바꾸고 `pay` 호출 →
+
+```
+revert
+Reason provided by the contract: "not insurer"
+```
+
+로그를 펼쳐 `transaction cost`를 보라. **아무것도 안 바뀌었는데 가스는 나갔다.** 전 세계 노드가 이미 그 연산을 다 돌렸기 때문이다.
+
+**② 2회차 가스가 정말 떨어지는가**
+
+같은 `pay`를 한 번 더 호출해 `transaction cost`를 1회차와 비교한다. 위 표의 계산값(약 35,000)과 맞는지 확인.
+
+---
+
+## 5. 실습으로 확인한 것 정리
+
+| 개념 | 눈으로 본 증거 |
+| --- | --- |
+| 계정 두 종류 | 컨트랙트에는 `storageRoot`가 있고 EOA에는 없다 |
+| 배포 ≠ 수정 | Deploy 3번 → 별개 컨트랙트 3개, 주소 전부 다름 |
+| 주소 생성 규칙 | 배포자 + nonce → 같은 계정이면 매번 다른 주소 |
+| storage 가격표 | 최초 기록 22,100 vs 수정 5,000 |
+| 배포 비용 | 386,784 가스 — 함수 호출의 10배 |
+| 바이트코드만 올라간다 | 로그의 `output` 16진수 덩어리 |
+| 이벤트 구조 | `indexed` → topics / 나머지 → data |
+| **`private` 노출** | **`getStorageAt(주소, 2)` → `0x0309`** |
+| `view` 는 공짜 | "Cost only applies when called by a contract" |
+
+---
+
+## 6. Remix 사용 메모
+
+실습하면서 실제로 막혔던 것들.
+
+| 증상 | 원인 |
+| --- | --- |
+| `totalPaid`가 계속 0 | 컨트랙트를 여러 개 배포해 놓고 **다른 인스턴스**를 읽고 있었음 |
+| `Provided address 5.2e+47 is invalid` | 주소에 **따옴표를 안 붙임** → JS가 16진수 숫자로 읽어 정밀도 손실 |
+| `capitalization checksum test failed` | 목록에 보이는 **대문자 표기를 그대로 타이핑**함 → 복사 버튼을 쓸 것 |
+| `"undefined" is not valid JSON` | Remix 스크립트 러너 버그. **값은 이미 출력된 뒤**라 무시해도 됨 |
+| `async` 블록이 터짐 | 스크립트 러너가 까다로움 → **한 줄씩** 실행할 것 |
+
+**로그 읽는 법**
+
+```
+transact to Claim.pay(...)  ← 상태 변경. 가스 나감 (주황 버튼)
+call to Claim.totalPaid()   ← 읽기만. 공짜 (파란 버튼)
+to Claim.(constructor)      ← 배포. 'contract address' 필드가 여기에만 있다
+```
+
+> ⚠️ 로그의 `to`가 두 군데 나온다. **트랜잭션의 `to`** 는 함수 시그니처 뒤에 붙는 **컨트랙트 주소**이고, `decoded input`의 `"address to"` 는 그냥 **함수 파라미터 이름**이다. 헷갈리지 않으려면 파라미터를 `recipient` 같은 이름으로 짓는 게 낫다.
+
+> ⚠️ Remix는 코드를 **브라우저에만** 저장한다. 캐시를 지우면 날아간다. 그래서 이 레포에 `contracts/Claim.sol`로 백업해 두었다.
+
+---
+
+## 7. 참고
+
+- [ethereum.org · 스마트 컨트랙트](https://ethereum.org/ko/developers/docs/smart-contracts/)
+- [ethereum.org · 계정](https://ethereum.org/ko/developers/docs/accounts/)
+- [ethereum.org · EVM](https://ethereum.org/ko/developers/docs/evm/)
+- [ethereum.org · DApp 소개](https://ethereum.org/ko/developers/docs/dapps/)
+- [Remix IDE](https://remix.ethereum.org) — 공식 도메인. 피싱 클론이 존재하므로 주소창에 직접 입력할 것
+- [Solidity 공식 문서](https://docs.soliditylang.org/)
