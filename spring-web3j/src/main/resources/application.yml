@@ -1,0 +1,20 @@
+spring:
+  application:
+    name: blockchain-spring-web3j
+
+chain:
+  # Anvil 기본값. scripts/anvil.sh 로 띄운다.
+  rpc-url: http://127.0.0.1:8545
+  chain-id: 31337
+
+  # Anvil 이 콘솔에 찍어 주는 0번 계정의 개인키.
+  # 전 세계가 아는 공개된 테스트 키다. 메인넷에 쓰면 즉시 털린다.
+  private-key: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+
+  # 블록이 즉시 생성되는 로컬 체인 기준. 실제 네트워크에서는 늘려야 한다.
+  receipt-poll-interval-ms: 300
+  receipt-poll-attempts: 40
+
+logging:
+  level:
+    com.study.chain: DEBUG

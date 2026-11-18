@@ -1,0 +1,8 @@
+# forge 가 컨트랙트를 찾고 결과를 내놓을 위치
+[profile.default]
+src = "contracts"
+out = "build/contracts"
+libs = []
+solc = "0.8.24"
+optimizer = true
+optimizer_runs = 200

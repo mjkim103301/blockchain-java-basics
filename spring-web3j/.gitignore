@@ -1,0 +1,8 @@
+build/
+.gradle/
+out/
+cache/
+.idea/
+*.iml
+.DS_Store
+.omc/
