@@ -4,8 +4,10 @@ import org.web3j.abi.FunctionEncoder
 import org.web3j.abi.FunctionReturnDecoder
 import org.web3j.abi.TypeReference
 import org.web3j.abi.datatypes.Address
+import org.web3j.abi.datatypes.Bool
 import org.web3j.abi.datatypes.Function
 import org.web3j.abi.datatypes.Type
+import org.web3j.abi.datatypes.generated.Bytes32
 import org.web3j.abi.datatypes.generated.Uint256
 import org.springframework.stereotype.Component
 import java.math.BigInteger
@@ -64,18 +66,69 @@ class ContractCodec {
     fun getFunction(): Function =
         Function("get", emptyList(), listOf(object : TypeReference<Uint256>() {}))
 
+    // -------------------------------------------- Claim (3주차 컨트랙트)
+
+    /**
+     * 3주차 Claim.sol 의 함수들. Remix 에서 손으로 눌렀던 pay/paidOf 를
+     * 여기서는 Web3j 로 인코딩한다 — 선택자가 같으면 어느 쪽에서 호출하든
+     * 체인 입장에서는 똑같은 호출이다.
+     */
+    fun encodePay(to: String, amount: BigInteger): String =
+        FunctionEncoder.encode(Function("pay", listOf(Address(to), Uint256(amount)), emptyList()))
+
+    fun paidOfFunction(who: String): Function =
+        Function("paidOf", listOf(Address(who)), listOf(object : TypeReference<Uint256>() {}))
+
+    fun insurerFunction(): Function =
+        Function("insurer", emptyList(), listOf(object : TypeReference<Address>() {}))
+
+    // --------------------------------------- DocumentRegistry (4주차)
+
+    /**
+     * register(bytes32) / verify(bytes32).
+     *
+     * 문서 "내용"이 아니라 문서의 SHA-256 "해시"가 인자로 들어간다는 점이
+     * mint/pay 와 다른 전부다. bytes32 타입은 정확히 32바이트만 받는다 —
+     * SHA-256 결과가 정확히 32바이트라서 변환 없이 그대로 들어맞는다.
+     */
+    fun encodeRegister(docHash: ByteArray): String {
+        require(docHash.size == 32) { "docHash 는 32바이트여야 한다 (SHA-256 결과). size=${docHash.size}" }
+        return FunctionEncoder.encode(Function("register", listOf(Bytes32(docHash)), emptyList()))
+    }
+
+    /** verify 는 4개짜리 튜플(bool,address,uint256,uint256)을 돌려준다. decodeAll() 로 받는다. */
+    fun verifyFunction(docHash: ByteArray): Function {
+        require(docHash.size == 32) { "docHash 는 32바이트여야 한다 (SHA-256 결과). size=${docHash.size}" }
+        return Function(
+            "verify",
+            listOf(Bytes32(docHash)),
+            listOf(
+                object : TypeReference<Bool>() {},
+                object : TypeReference<Address>() {},
+                object : TypeReference<Uint256>() {},
+                object : TypeReference<Uint256>() {},
+            ),
+        )
+    }
+
     // ------------------------------------------------------------ 공통
 
     /** 함수 선택자 4바이트만 뽑는다. Etherscan 의 Input Data 맨 앞에 보이는 그것. */
     fun selectorOf(function: Function): String =
         FunctionEncoder.encode(function).take(10)   // "0x" + 8자리
 
-    /** eth_call 의 반환 바이트열을 ABI 로 디코딩한다. */
+    /** eth_call 의 반환 바이트열을 ABI 로 디코딩한다 — 반환값이 하나일 때. */
     @Suppress("UNCHECKED_CAST")
     fun <T : Type<*>> decodeSingle(function: Function, rawValue: String): T {
+        val decoded = decodeAll(function, rawValue)
+        return decoded[0] as T
+    }
+
+    /** 반환값이 여러 개(튜플)일 때. verify() 처럼 (bool,address,uint256,uint256) 를 받을 때 쓴다. */
+    fun decodeAll(function: Function, rawValue: String): List<Type<*>> {
         val decoded: List<Type<*>> =
             FunctionReturnDecoder.decode(rawValue, function.outputParameters)
         check(decoded.isNotEmpty()) { "디코딩 결과가 비어 있다. revert 되었을 수 있다. raw=$rawValue" }
-        return decoded[0] as T
+        return decoded
     }
 }

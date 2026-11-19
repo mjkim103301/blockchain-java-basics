@@ -4,7 +4,7 @@
 
 - **1·2주차** — JDK 21만 있으면 된다. 외부 라이브러리 없음 (`java.security` 표준 API)
 - **3주차** — 브라우저만 있으면 된다 (Remix IDE)
-- **4주차** — JDK 21 + 로컬 체인 (Spring Boot · Kotlin · Web3j)
+- **4주차** — JDK 21 + 로컬 체인(Anvil) + PostgreSQL (Spring Boot · Kotlin · Web3j · JPA)
 
 ```bash
 bash run.sh                  # 1주차 — 해시와 블록 연결
@@ -12,7 +12,8 @@ bash run.sh SignatureMain    # 2주차 — 전자서명과 트랜잭션 구조
 
 cd spring-web3j
 bash scripts/anvil.sh        # 4주차 — 로컬 체인 (별도 터미널)
-./gradlew test               #        교재 2강 흐름 전체
+bash scripts/postgres.sh     #        PostgreSQL (최초 1회)
+./gradlew test               #        교재 2강 + 문서 무결성 API, 16개
 ```
 
 3주차는 Java가 아니라 Solidity다. [remix.ethereum.org](https://remix.ethereum.org) 에 `contracts/Claim.sol` 을 붙여넣어 실행한다.
@@ -22,7 +23,7 @@ bash scripts/anvil.sh        # 4주차 — 로컬 체인 (별도 터미널)
 | [1주차](#1주차--해시와-블록-연결) | SHA-256, 블록 연결, 작업증명 | `Hashes` `Block` `Blockchain` `Main` | 중앙DB/분산DB/블록체인 비교표 |
 | [2주차](#2주차--전자서명과-트랜잭션-구조) | 키 쌍, 서명·검증, 변조 탐지, 이더리움 필드 | `Wallet` `Transaction` `EthTxSpec` `SignatureMain` | [흐름도](docs/transaction-flow.md) · [토론](docs/discussion.md) |
 | [3주차](#3주차--스마트-컨트랙트와-evm) | EOA·컨트랙트 계정, EVM, 가스, 스토리지 노출 | `contracts/Claim.sol` | 실습 기록 5건 |
-| **[4주차](spring-web3j/)** | **JSON-RPC, Web3j, ABI, 읽기/쓰기, 영수증** | **`spring-web3j/`** (Kotlin + Spring Boot) | [README](spring-web3j/README.md) · 교재 ↔ 코드 대응표 |
+| **[4주차](spring-web3j/)** | **JSON-RPC, Web3j, ABI, 읽기/쓰기, 영수증, 문서 무결성 API** | **`spring-web3j/`** (Kotlin + Spring Boot + PostgreSQL) | [README](spring-web3j/README.md) · 교재 ↔ 코드 대응표 |
 
 ---
 
@@ -810,14 +811,20 @@ to Claim.(constructor)      ← 배포. 'contract address' 필드가 여기에�
 
 ```bash
 cd spring-web3j
-bash scripts/anvil.sh      # 1) 로컬 체인 (별도 터미널)
-./gradlew test             # 2) 교재 2강 흐름 전체
-./gradlew bootRun          # 3) REST 로 눌러보기
+bash scripts/anvil.sh       # 1) 로컬 체인 (별도 터미널)
+bash scripts/postgres.sh    # 2) PostgreSQL — 최초 1회
+./gradlew test              # 3) 교재 2강 + 문서 무결성 API, 16개 테스트
+./gradlew bootRun           # 4) REST 로 눌러보기
 ```
 
-교재 **2강 「Understanding Account-based Blockchain」** 의 caver-js 예제를 **Spring Boot + Kotlin + Web3j** 로 1:1 이식했다.
+두 실습을 담는다.
+
+1. 교재 **2강 「Understanding Account-based Blockchain」** 의 caver-js 예제를 **Spring Boot + Kotlin + Web3j** 로 1:1 이식
+2. 공동 PoC **「전자계약 문서 무결성 검증 API」** — A(Solidity)·B(Spring+Web3j)·C(PostgreSQL) 세 역할이 만나는 지점
 
 **산출물**: [`spring-web3j/`](spring-web3j/) — 전체 설명은 [그쪽 README](spring-web3j/README.md)에 있다.
+
+> ⚠ PostgreSQL 이 붙으면서 **3주차까지와 달리 체인 전용 테스트도 DB 없이는 못 돈다.** `bash scripts/postgres.sh` 로 먼저 띄울 것 — 자세한 이유는 spring-web3j README §9.
 
 ---
 

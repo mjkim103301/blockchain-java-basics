@@ -2,6 +2,35 @@ spring:
   application:
     name: blockchain-spring-web3j
 
+  # 담당 C 몫 — 트랜잭션 상태(document_record 테이블)를 저장하는 곳.
+  # 기본값은 docker 없이 brew 로 올린 로컬 PostgreSQL 기준이다.
+  #   brew install postgresql@16 && brew services start postgresql@16
+  #   createuser -s postgres && psql -c "ALTER USER postgres PASSWORD 'postgres'"
+  #   createdb -O postgres blockchain_study
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/blockchain_study}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      # 기본 30초 대신 3초로 줄인다. 어차피 Hibernate 가 EntityManagerFactory 를
+      # 만들며 바로 JDBC 메타데이터(Dialect)를 물어보기 때문에, Postgres 가
+      # 꺼져 있으면 "느리게 실패하느냐 빠르게 실패하느냐"의 차이만 있을 뿐
+      # 결국 애플리케이션은 못 뜬다. 3주차 이후부터는 JPA 가 Spring 컨텍스트에
+      # 묶여 있어서 "체인만 보는 테스트도 DB 없이는 못 돈다" — 이 레포가
+      # 아래로 갈수록 의존성이 늘어나는 게 그대로 드러나는 지점이다.
+      connection-timeout: 3000
+
+  jpa:
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+    hibernate:
+      # PoC 단계라 엔티티로 스키마를 맞춘다. 운영에서는 Flyway/Liquibase 로 바꿔야 한다
+      # — ddl-auto 는 동시에 여러 인스턴스가 떠 있으면 위험하다 (3주차: 배포=수정 아님, 과 같은 맥락).
+      ddl-auto: update
+
 chain:
   # Anvil 기본값. scripts/anvil.sh 로 띄운다.
   rpc-url: http://127.0.0.1:8545

@@ -1,15 +1,26 @@
 # 블록체인 스터디 4주차 — Spring Boot × Web3j
 
-교재 **2강 「Understanding Account-based Blockchain」** 의 caver-js 예제를
-**Spring Boot + Kotlin + Web3j** 로 그대로 옮긴 것이다.
+이 프로젝트는 두 실습을 담는다.
+
+1. 교재 **2강 「Understanding Account-based Blockchain」** 의 caver-js 예제를
+   **Spring Boot + Kotlin + Web3j** 로 옮긴 것 (§1~7)
+2. 공동 PoC **「전자계약 문서 무결성 검증 API」** — A(Solidity)·B(Spring+Web3j)·
+   C(PostgreSQL) 세 역할이 만나는 지점 (§8~)
 
 ```bash
-bash scripts/anvil.sh      # 1) 로컬 체인 (별도 터미널)
-./gradlew test             # 2) 교재 흐름 전체를 통과시키는 테스트
-./gradlew bootRun          # 3) REST 로 하나씩 눌러보기
+bash scripts/anvil.sh       # 1) 로컬 체인 (별도 터미널)
+bash scripts/postgres.sh    # 2) PostgreSQL — 최초 1회, 이후엔 start 만
+./gradlew test              # 3) 두 실습 전체를 통과시키는 테스트 (16개)
+./gradlew bootRun           # 4) REST 로 하나씩 눌러보기
 ```
 
-JDK 21만 있으면 된다. Anvil이 없으면 테스트는 **실패가 아니라 skip** 된다.
+JDK 21만 있으면 된다.
+
+> ⚠ **3주차까지와 달리, 이제는 Anvil 과 PostgreSQL 이 "둘 다" 떠 있어야 한다.**
+> JPA(Spring Data)가 애플리케이션 시작 시점에 DataSource 를 필요로 하기 때문에,
+> DB 가 꺼져 있으면 체인과 무관한 테스트까지 포함해 **컨텍스트 로딩 자체가 실패**한다
+> (Anvil 만 없을 때처럼 "그 테스트만 조용히 skip" 되지 않는다 — 3초 안에 실패하도록
+> `hikari.connection-timeout` 을 낮춰 뒀다). §9 에서 더 다룬다.
 
 ---
 
@@ -202,21 +213,33 @@ Web3j가 내부에서 영수증을 polling한다. 로컬 Anvil은 즉시 끝나�
 contracts/
   Coin.sol              교재 Coin 컨트랙트 (minter / mint / send / Sent)
   SimpleStorage.sol     교재 SimpleStorage (set=mutation, get=constant)
+  Claim.sol             3주차 컨트랙트 원본 (로직 변경 없음)
+  DocumentRegistry.sol  8절 — 문서 해시 등록·검증 (A 담당)
 
 scripts/
   anvil.sh              로컬 체인. 인자로 block-time 지정 가능
-  compile.sh            forge build → .abi / .bin 추출
+  postgres.sh           PostgreSQL 설치·계정·DB 생성 (C 담당 인프라)
+  compile.sh            forge build → 모든 .sol 의 .abi / .bin 자동 추출
 
 src/main/kotlin/com/study/chain/
-  config/Web3jConfig.kt           교재의 new Caver(url) 에 대응
-  service/BlockchainStateService  1부 Blockchain State
-  service/WalletService           SDK - accounts.wallet
-  service/ValueTransferService    2부 Transactions
-  service/ContractCodec           Bytecode & ABI
-  service/CoinContractService     3·4부 Smart Contracts + SDK
-  web/StudyController             curl 로 눌러보는 용도
+  config/Web3jConfig.kt             교재의 new Caver(url) 에 대응
+  service/BlockchainStateService    1부 Blockchain State
+  service/WalletService             SDK - accounts.wallet
+  service/ValueTransferService      2부 Transactions
+  service/ContractCodec             Bytecode & ABI (Coin·Claim·DocumentRegistry 전부)
+  service/CoinContractService       3·4부 Smart Contracts + SDK
+  service/ClaimContractService      8.2절 — 3주차 컨트랙트 재배포 (B 담당)
+  service/DocumentHasher            SHA-256 — 1주차 Hashes 와 같은 원리
+  service/DocumentRegistryService   8절 핵심 — register/verify (B 담당)
+  service/DocumentLedger            PostgreSQL 쓰기 (C 담당, repo 에 위임)
+  web/StudyController               1~7절 curl 로 눌러보는 용도
+  web/DocumentController            8절 — 문서 무결성 API (B 담당)
 
-src/main/resources/contracts/     컴파일 산출물 (.abi / .bin)
+src/main/kotlin/com/study/chain/repo/   8.5절 — PostgreSQL 엔티티 (C 담당)
+  DocumentRecordEntity.kt
+  DocumentRecordRepository.kt
+
+src/main/resources/contracts/     컴파일 산출물 (.abi / .bin, 4개 전부)
 ```
 
 ### 컨트랙트를 고쳤다면
@@ -247,10 +270,168 @@ bash scripts/anvil.sh 12      # ← 12초마다 블록 생성
 
 ---
 
-## 7. 참고
+---
+
+# 8. 전자계약 문서 무결성 검증 API
+
+공동 PoC 실습. **완료 기준**: 문서 해시 등록과 조회, 변경 여부 검증이 API 호출로 정상 수행된다 — curl 세 번으로 아래에서 그대로 재현했다.
+
+```bash
+curl -X POST localhost:8080/api/documents/deploy
+# { "contractAddress": "0x1291be…" }
+
+curl -X POST localhost:8080/api/documents/register -F "file=@contract.txt"
+# { "docHash":"0xad7a25…", "status":"CONFIRMED", "txHash":"0xe3ba9b…", "blockNumber":60, "gasUsed":90258 }
+
+curl -X POST localhost:8080/api/documents/verify -F "file=@contract.txt"
+# { "match": true,  "verdict": "원본과 일치 — 변조되지 않았다" }
+
+curl -X POST localhost:8080/api/documents/verify -F "file=@contract_수정됨.txt"
+# { "match": false, "verdict": "불일치 — 변조되었거나 등록된 적 없는 내용" }
+```
+
+## 8.1 역할 분담 ↔ 코드
+
+| 담당 | 개발 범위 | 코드 |
+| --- | --- | --- |
+| **A** | Solidity 컨트랙트 및 배포 | `contracts/DocumentRegistry.sol` |
+| **B** | Spring Boot · Web3j API | `service/DocumentRegistryService.kt`, `web/DocumentController.kt` |
+| **C** | PostgreSQL · 트랜잭션 상태 관리 | `repo/DocumentRecordEntity.kt`, `repo/DocumentRecordRepository.kt`, `service/DocumentLedger.kt` |
+
+세 역할이 실제로 만나는 지점은 `DocumentRegistryService.register()` 한 곳이다 — A 가 정의한 `register(bytes32)` 를 B 가 Web3j 로 호출하고, 그 결과(txHash·status·gasUsed)를 C 의 테이블에 쓴다.
+
+## 8.2 왜 3주차 Claim.sol 을 그대로 못 쓰는가
+
+실습 순서에 **"3. 3주차 컨트랙트를 로컬 블록체인에 배포"** 가 있다. 그런데 `Claim.sol`은 "주소 → 지급액" 장부라서 **문서를 저장할 자리가 없다.**
+
+그래서 두 가지를 분리해서 수행했다.
+
+- **문자 그대로의 3단계** — `contracts/Claim.sol` (3주차 원본, 로직 변경 없음)을 Web3j로 Anvil에 배포한다. `ClaimContractService` + `ClaimRedeployTest`. 3주차에서 Remix로 손으로 누르던 걸 코드로 재현한 것뿐이다.
+- **실제 문서 무결성 기능** — 해시만 저장하는 `contracts/DocumentRegistry.sol` 을 **새로 작성**했다. `require`·`mapping`·`event` 패턴은 Claim.sol과 동일하되, 저장하는 게 "지급액"이 아니라 "32바이트 지문"이라는 점만 다르다.
+
+```solidity
+mapping(bytes32 => Record) private records;   // 문서 내용이 아니라 문서의 해시가 key
+
+function register(bytes32 docHash) external {
+    require(records[docHash].registeredAt == 0, "Document already registered.");
+    records[docHash] = Record(msg.sender, block.timestamp, block.number);
+    emit DocumentRegistered(docHash, msg.sender, block.timestamp);
+}
+```
+
+## 8.3 검증 원리 — 앵커링 패턴 그대로
+
+**원본 파일은 어디에도 저장하지 않는다.** SHA-256 해시 32바이트만 체인에 올린다(1주차 `Hashes.sha256`과 같은 원리, `DocumentHasher.kt`). bytes32 타입을 고른 이유도 이것이다 — SHA-256 결과가 정확히 32바이트라서 변환 없이 그대로 들어맞는다.
+
+```
+등록할 때   파일 → SHA-256 → register(해시)         ← 파일 내용 자체는 전송만 되고 저장 안 됨
+검증할 때   파일 → SHA-256 → verify(해시) → 등록 여부 확인
+```
+
+한 글자라도 바뀌면 SHA-256 결과가 완전히 달라진다(눈사태 효과, 1주차). 그래서 "등록된 해시와 일치하는가"만 보면 변조 여부가 그대로 드러난다. `exists=false` 는 "변조됐다"와 "애초에 등록 안 됐다"를 구분하지 않는다 — 어느 쪽이든 "이 내용은 체인이 보증하지 않는다"는 결론은 같기 때문이다.
+
+## 8.4 실측 — 등록 → 조회 → 변조 검증
+
+실제로 curl 로 돌려서 나온 값이다.
+
+```
+POST /documents/deploy
+  contractAddress = 0x1291be112d480055dafd8a610b7d1e203891c274
+
+POST /documents/register  (원본: "계약 당사자: OO생명 / 홍길동. 보험금: 1,000,000원...")
+  docHash    = 0xad7a2533…d649589
+  status     = CONFIRMED
+  gasUsed    = 90,258          ← Claim.pay(46,370)보다 두 배 — 구조체 3칸을 한 번에 쓰기 때문
+  blockNumber= 60
+
+POST /documents/verify  (같은 파일)
+  match = true   "원본과 일치 — 변조되지 않았다"
+
+POST /documents/verify  (금액을 9,999,999원으로 바꾼 파일)
+  docHash = 0xc651c8b2…(완전히 다른 값)
+  match   = false  "불일치 — 변조되었거나 등록된 적 없는 내용"
+```
+
+PostgreSQL 에도 그대로 쌓인다.
+
+```sql
+select doc_hash, status, block_number, gas_used from document_record;
+
+doc_hash                                                            | status    | block_number | gas_used
+0xad7a2533…d649589                                                  | CONFIRMED |            60 |    90258
+0xb4278f33…9b47cae3 (중복 등록 시도)                                  | REVERTED  |          null |    24084
+```
+
+**테스트 6개**가 이 흐름 전체를 자동으로 검증한다 (`DocumentIntegrityTest`).
+
+```
+5+6. 문서를 등록하면 CONFIRMED로 저장되고 txHash·블록번호가 남는다      PASSED
+     같은 문서를 두 번 등록하면 두 번째는 REVERTED — 이미 등록됨       PASSED
+7-가. 원본 그대로 검증하면 일치한다                                   PASSED
+7-나. 원본이 한 글자라도 바뀌면 검증 실패 — 눈사태 효과                 PASSED
+     등록한 적 없는 문서는 애초에 존재하지 않는다                      PASSED
+     문서가 다른 계약서는 등록자(registrant)가 다를 수 있다            PASSED
+```
+
+## 8.5 PostgreSQL 쪽 설계 (담당 C)
+
+```
+document_record
+  doc_hash          varchar(66)  PK   "0x" + SHA-256 64자리
+  contract_address  varchar(42)
+  tx_hash           varchar(66)       영수증이 아니라 접수증 — 아래 §8.6 참고
+  registrant        varchar(42)
+  status            varchar(16)       SUBMITTED / CONFIRMED / REVERTED / UNKNOWN
+  block_number      bigint
+  gas_used          bigint
+  revert_reason     varchar(255)
+  created_at / updated_at
+```
+
+**이 테이블에 들어가는 건 "체인 데이터"가 아니다.** "우리가 체인에 무엇을 보냈고 결과가 어떻게 됐는지"에 대한 우리 쪽 기록이다. 진실의 원천은 여전히 체인이고, 이 테이블이 체인과 어긋나면 체인이 맞다 — 빠른 조회와 장애 복구를 위한 사본일 뿐이다.
+
+PoC 단계라 `ddl-auto: update` 로 스키마를 엔티티에 맞췄다. 운영이라면 Flyway/Liquibase 로 바꿔야 한다 — 여러 인스턴스가 동시에 `ddl-auto` 를 돌리면 위험하다(3주차 "배포는 수정이 아니다"와 같은 종류의 함정이다).
+
+## 8.6 DB 쓰기와 체인 쓰기는 절대 한 트랜잭션이 아니다
+
+```kotlin
+val txHash = tx.sendRaw(signedHex)
+
+// ⚠ 영수증을 기다리기 '전에' 저장한다 — 이 서비스에서 제일 중요한 한 줄
+ledger.save(docHash, contract, txHash, from.address, SUBMITTED)
+
+val receipt = tx.awaitReceipt(txHash)   // 여기서 죽어도 위 줄은 이미 커밋돼 있다
+```
+
+DB 트랜잭션(`@Transactional`)은 롤백이 된다. 체인 트랜잭션은 한 번 나가면 롤백이 없다. **둘을 하나의 `@Transactional` 로 묶으면 안 된다** — `DocumentLedger.save()`가 먼저 커밋되고, `awaitReceipt()`가 그 다음에 일어나는 구조를 유지해야 한다. 이게 지켜지면 서버가 영수증을 기다리다 죽어도 "제출은 했다"는 기록이 남아서 나중에 복구할 수 있다.
+
+---
+
+# 9. Web3j 빈과 JPA 빈이 충돌했던 일
+
+실제로 겪은 버그라 적어 둔다. Postgres 를 붙이자마자 테스트가 전부 깨졌다.
+
+```
+BeanDefinitionOverrideException: Cannot register bean definition ... for bean
+'transactionManager' since there is already [... Web3jConfig] bound.
+```
+
+`Web3jConfig` 에 있던 `fun transactionManager(...): TransactionManager` 가
+**Spring 이 JPA 용으로 자동 등록하는 `PlatformTransactionManager` 빈과 이름이 겹쳤다.**
+둘은 전혀 다른 타입(하나는 Web3j 의 "체인 트랜잭션" 매니저, 하나는 Spring 의
+"DB 트랜잭션" 매니저)인데 Kotlin 함수 이름이 곧 빈 이름이 되는 바람에 충돌했다.
+
+`web3jTransactionManager` 로 이름을 바꿔서 해결했다. 사소해 보이지만, **"트랜잭션"
+이라는 같은 단어가 체인과 DB에서 완전히 다른 보장을 가리킨다**는 이 레포 전체의
+주제를, 빈 이름 충돌이라는 형태로 실제로 겪은 셈이다.
+
+---
+
+## 10. 참고
 
 - 교재 — 2강 Understanding Account-based Blockchain (2019)
 - [Web3j 공식 문서](https://docs.web3j.io/) — core 4.14.0
 - [Foundry · Anvil](https://getfoundry.sh/anvil/overview)
 - [Ethereum JSON-RPC API](https://ethereum.org/ko/developers/docs/apis/json-rpc/)
 - [Kaia 공식 문서](https://docs.kaia.io/) — Klaytn의 현재 이름
+- [Spring Data JPA](https://docs.spring.io/spring-data/jpa/reference/)

@@ -9,7 +9,9 @@ import org.web3j.crypto.Credentials
 import org.web3j.crypto.RawTransaction
 import org.web3j.crypto.TransactionEncoder
 import org.web3j.protocol.Web3j
+import org.web3j.protocol.core.DefaultBlockParameter
 import org.web3j.protocol.core.DefaultBlockParameterName
+import org.web3j.protocol.core.methods.request.Transaction
 import org.web3j.protocol.core.methods.response.TransactionReceipt
 import org.web3j.utils.Convert
 import org.web3j.utils.Numeric
@@ -141,4 +143,19 @@ class ValueTransferService(
 
     fun toEther(wei: BigInteger): BigDecimal =
         Convert.fromWei(wei.toBigDecimal(), Convert.Unit.ETHER)
+
+    /**
+     * revert 사유를 알아낸다.
+     *
+     * 영수증에는 사유가 들어 있지 않다. 같은 입력으로, 같은 블록 시점에서
+     * eth_call 을 다시 실행하면(= "되감아 본다") 그 자리에서 revert 메시지를
+     * 받을 수 있다. 3주차에서 바이트코드에 "not insurer" 가 그대로 박혀
+     * 있던 그 문자열이 여기서 나온다.
+     */
+    fun revertReasonOf(receipt: TransactionReceipt, originalCallData: String): String? {
+        if (isSuccess(receipt)) return null
+        val call = Transaction.createEthCallTransaction(receipt.from, receipt.to, originalCallData)
+        val resp = web3j.ethCall(call, DefaultBlockParameter.valueOf(receipt.blockNumber)).send()
+        return if (resp.isReverted) resp.revertReason else null
+    }
 }

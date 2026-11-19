@@ -41,9 +41,14 @@ class Web3jConfig(private val props: ChainProperties) {
      * 주의 — 이 매니저는 매번 eth_getTransactionCount 로 nonce 를 읽는다.
      * 인스턴스가 둘 이상이고 같은 지갑을 쓰면 같은 nonce 를 받아 충돌한다.
      * 제출 워커는 단일 인스턴스로 돌려야 한다.
+     *
+     * 빈 이름을 "transactionManager" 로 두면 안 된다 — 4주차에서 PostgreSQL 을
+     * 붙이면서 Spring 이 자동 등록하는 JPA 의 PlatformTransactionManager(DB 트랜잭션)
+     * 와 이름이 그대로 충돌한다. 이름 하나로 "체인 트랜잭션"과 "DB 트랜잭션"이
+     * 전혀 다른 것이라는 사실이 코드 레벨에서도 드러난 셈이다.
      */
     @Bean
-    fun transactionManager(web3j: Web3j, credentials: Credentials): TransactionManager =
+    fun web3jTransactionManager(web3j: Web3j, credentials: Credentials): TransactionManager =
         RawTransactionManager(
             web3j,
             credentials,
